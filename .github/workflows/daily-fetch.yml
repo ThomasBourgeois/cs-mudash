@@ -1,0 +1,53 @@
+name: Relevé quotidien Meetup
+
+on:
+  schedule:
+    # 06:00 UTC = 08:00 Paris en été, 07:00 en hiver.
+    # GitHub Actions déclenche « au mieux » : des retards de 5 à 30 min sont
+    # normaux, et une exécution peut être sautée aux heures de pointe. Sans
+    # conséquence ici : le snapshot est daté du jour, pas de la minute.
+    - cron: "0 6 * * *"
+  # Permet de lancer le relevé à la main depuis l'onglet Actions.
+  workflow_dispatch:
+
+# Le job commite l'historique : il lui faut le droit d'écrire sur le dépôt.
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` installe toutes les dépendances, dont Next et React, inutiles
+      # pour le relevé. Seul tsx est nécessaire : on l'installe seul, le job
+      # passe de ~40 s à ~5 s.
+      - name: Installer tsx
+        run: npm install --no-save tsx@4
+
+      - name: Relever les chiffres
+        env:
+          MEETUP_GROUP: ${{ vars.MEETUP_GROUP || 'coder-comprendre-lia-grands-debutants-paris' }}
+        run: npx tsx scripts/fetch-meetup.ts
+
+      - name: Commiter l'historique
+        run: |
+          if git diff --quiet -- data/history.ndjson; then
+            echo "Aucun changement — rien à commiter."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history.ndjson
+          git commit -m "chore(data): relevé Meetup du $(date -u +%Y-%m-%d)"
+          git push

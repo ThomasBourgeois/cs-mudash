@@ -2,7 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(npm --version)",
-      "Bash(pnpm --version)"
+      "Bash(pnpm --version)",
+      "Bash(node /tmp/claude-1000/bundled-skills/2.1.220/5db284be9a3afd43ef787e02232ffe1b/dataviz/scripts/validate_palette.js '#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300' --mode light --surface '#ffffff')",
+      "Bash(node /tmp/claude-1000/bundled-skills/2.1.220/5db284be9a3afd43ef787e02232ffe1b/dataviz/scripts/validate_palette.js '#3987e5,#d95926,#199e70,#c98500,#d55181,#008300' --mode dark --surface '#171717')",
+      "Bash(grep -nE '^#{2,3} ' /tmp/claude-1000/bundled-skills/2.1.220/5db284be9a3afd43ef787e02232ffe1b/dataviz/references/marks-and-anatomy.md)",
+      "Bash(npm run *)",
+      "Bash(python3 -c ' *)",
+      "Bash(node -p \"require\\('./node_modules/recharts/package.json'\\).version\")",
+      "Bash(MUDASH_DEMO=1 npx next dev -p 3737)",
+      "Bash(curl -s http://localhost:3737 -o /tmp/claude-1000/-home-user-Projects-cs-mudash/68818336-8cfc-400f-a672-0010926d85e3/scratchpad/rendered.html -w 'HTTP %{http_code}\\\\n')",
+      "Bash(google-chrome --headless=new --disable-gpu --no-sandbox --hide-scrollbars --virtual-time-budget=10000 --window-size=1440,2300 --screenshot=/tmp/claude-1000/-home-user-Projects-cs-mudash/68818336-8cfc-400f-a672-0010926d85e3/scratchpad/light.png http://localhost:3737)",
+      "Bash(grep -nA12 \"function SelectValue\" src/components/ui/select.tsx)",
+      "Bash(google-chrome --headless=new --disable-gpu --no-sandbox --hide-scrollbars --virtual-time-budget=10000 --window-size=1440,1250 --screenshot=/tmp/claude-1000/-home-user-Projects-cs-mudash/68818336-8cfc-400f-a672-0010926d85e3/scratchpad/light2.png http://localhost:3737)"
     ]
   }
 }

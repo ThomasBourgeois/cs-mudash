@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Historique de démonstration : régénérable via `npm run seed:demo`, et surtout
+# jamais versionné pour ne pas être confondu avec les vrais relevés.
+/data/history.demo.ndjson
