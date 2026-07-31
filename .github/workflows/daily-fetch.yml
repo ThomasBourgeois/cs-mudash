@@ -22,11 +22,13 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v7 tourne sur Node 24 : les v4 ciblaient Node 20, désormais déprécié sur
+      # les runners GitHub (voir le changelog du 19/09/2025).
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       # `npm ci` installe toutes les dépendances, dont Next et React, inutiles
