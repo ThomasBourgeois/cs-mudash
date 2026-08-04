@@ -43,3 +43,13 @@ next-env.d.ts
 # Historique de démonstration : régénérable via `npm run seed:demo`, et surtout
 # jamais versionné pour ne pas être confondu avec les vrais relevés.
 /data/history.demo.ndjson
+
+# Données personnelles des participants (emails, réponses aux questions) et
+# suivi des envois. Ne quittent JAMAIS cette machine : ni commit, ni push, ni
+# GitHub Actions. Le dashboard les affiche si les fichiers existent en local.
+/data/attendees.ndjson
+/data/attendees-sent.json
+
+# Captures brutes des réponses Meetup (`--dump`), pour debug du parsing.
+# Contiennent les mêmes données personnelles que data/attendees.ndjson.
+/.meetup-dump/

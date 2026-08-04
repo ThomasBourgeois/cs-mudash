@@ -39,6 +39,7 @@ Les données de démo ne sont jamais mélangées aux vraies ni versionnées.
 |---|---|
 | `npm run fetch` | Relève les chiffres et ajoute une ligne à `data/history.ndjson` |
 | `npm run fetch:dry` | Affiche le relevé sans rien écrire |
+| `npm run fetch:attendees` | Relève les participants et leurs emails (local, manuel) |
 | `npm run dev` | Dashboard en local |
 | `npm run seed:demo` / `npm run dev:demo` | Historique de démonstration |
 
@@ -95,6 +96,74 @@ dashboard parce qu'un relevé précédent les avait capturés.
 Le relevé tourne depuis une IP datacenter GitHub, plus exposée au blocage que
 ton IP personnelle. Si ça arrive un jour, le repli est `npm run fetch` en local.
 
+## Les emails des participants
+
+À l'inscription, chaque événement peut poser une question — ici : laisser son
+email et dire ce qui amène le participant, pour recevoir le support. Ces réponses
+ne sont **pas publiques** : seul l'organisateur connecté voit la page
+`/events/<id>/attendees/`. D'où un relevé séparé, **manuel et local**.
+
+### Mise en route
+
+1. Dans ton navigateur, connecté à Meetup, ouvre la page participants d'un
+   événement.
+2. **F12 → Network → Ctrl+R**, clique la première requête (le document
+   `attendees/`), section **Request Headers**, ligne `cookie:` → **Copy value**.
+3. Colle dans `.env.local` à la racine :
+
+   ```
+   MEETUP_COOKIE="…"
+   ```
+
+   Un « Copy as cURL » collé tel quel fonctionne aussi : le script en extrait le
+   cookie. Attention, un cookie isolé ne suffit pas — il faut l'en-tête complet
+   (une trentaine de paires).
+
+4. `npm run fetch:attendees`
+
+Le relevé couvre **les événements à venir** du dernier snapshot de
+`data/history.ndjson`, et charge les pages dans un Chromium headless : les
+réponses arrivent en GraphQL après l'hydratation, un simple `fetch` du HTML les
+manquerait.
+
+| Option | Effet |
+|---|---|
+| `-- --event 315692119` | Un seul événement |
+| `-- --dump` | Garde les réponses brutes dans `.meetup-dump/` |
+| `-- --from-dump` | Rejoue le parsing sur ces captures, sans réseau |
+
+Quand le cookie expire, Meetup renvoie vers `/login` et le script s'arrête en le
+disant. Il n'écrit jamais un relevé vide en croyant avoir réussi.
+
+### Ce qui est affiché
+
+Le dashboard ajoute une section **Emails des participants**, hors du filtre de
+plage temporelle — une adresse email ne se périme pas au bout de 7 jours. Par
+événement : la question posée, le tableau nom / email / réponse, un bouton
+« Copier les N emails » (séparés par `, `, prêts à coller dans un champ
+destinataires) et une case **Envoyé** par participant pour suivre les envois de
+matériel.
+
+Un événement sans question configurée est signalé comme tel : « 0 email » y
+signifie *rien n'a été demandé*, pas *personne n'a répondu*.
+
+### Confidentialité
+
+Ces données sont des **données personnelles de tiers** et ne quittent pas ta
+machine. Sont gitignorés, donc jamais commités ni poussés :
+
+| Chemin | Contenu |
+|---|---|
+| `data/attendees.ndjson` | Noms, emails, réponses |
+| `data/attendees-sent.json` | Suivi des envois |
+| `.meetup-dump/` | Captures brutes (`--dump`) |
+| `.env.local` | Le cookie de session |
+
+Le workflow GitHub Actions quotidien n'y touche pas — il ne commite que
+`history.ndjson`. Sur un déploiement distant, les fichiers étant absents, la
+section disparaît d'elle-même. Le mode démo ne les charge pas non plus : pas de
+vrais emails dans une capture d'écran.
+
 ## Données
 
 `data/history.ndjson`, une ligne JSON par jour :
@@ -113,3 +182,20 @@ ton IP personnelle. Si ça arrive un jour, le repli est `npm run fetch` en local
 
 Format append-only : les diffs git restent minuscules et l'historique complet est
 versionné, donc rien n'est jamais perdu.
+
+`data/attendees.ndjson`, une ligne par participant et par événement — **local,
+gitignoré** :
+
+```json
+{
+  "eventId": "315692119", "eventTitle": "…", "eventDateTime": "2026-08-06T19:00:00+02:00",
+  "eventQuestion": "Pour recevoir le lien du support…",
+  "memberId": "430924712", "name": "…",
+  "answers": ["prenom.nom@example.com"],
+  "email": "prenom.nom@example.com", "extraEmails": [],
+  "capturedAt": "2026-08-02T10:08:44.123Z"
+}
+```
+
+Clé `(eventId, memberId)` : un relevé remplace les participants des événements
+qu'il couvre et laisse les autres intacts, donc réexécutable sans doublon.

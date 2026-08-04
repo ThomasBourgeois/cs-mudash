@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 
+import { AttendeesPanel } from "@/components/attendees-panel"
 import { MembersChart } from "@/components/members-chart"
 import { EventsChart } from "@/components/events-chart"
 import { EventsTable } from "@/components/events-table"
@@ -24,7 +25,7 @@ import {
   memberSeries,
   upcomingEventSeries,
 } from "@/lib/metrics"
-import type { Snapshot } from "@/lib/types"
+import type { Attendee, SentMap, Snapshot } from "@/lib/types"
 
 const RANGES = [
   { value: "7", label: "7 derniers jours" },
@@ -36,9 +37,13 @@ const RANGES = [
 export function Dashboard({
   snapshots,
   isDemo,
+  attendees,
+  sent,
 }: {
   snapshots: Snapshot[]
   isDemo: boolean
+  attendees: Attendee[]
+  sent: SentMap
 }) {
   const [range, setRange] = useState<string>("30")
 
@@ -165,6 +170,21 @@ export function Dashboard({
       </div>
 
       <EventsTable events={registry} />
+
+      {/* Hors du cadrage de la plage temporelle : une adresse email ne se
+          périme pas au bout de 7 jours, la filtrer n'aurait aucun sens. */}
+      <section className="mt-2 flex flex-col gap-4">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Emails des participants
+          </h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Réponses laissées à l&apos;inscription, pour l&apos;envoi du matériel.
+            Données locales, jamais commitées.
+          </p>
+        </div>
+        <AttendeesPanel attendees={attendees} sent={sent} />
+      </section>
     </div>
   )
 }

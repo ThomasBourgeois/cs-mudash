@@ -9,6 +9,7 @@
     "lint": "eslint",
     "fetch": "tsx scripts/fetch-meetup.ts",
     "fetch:dry": "tsx scripts/fetch-meetup.ts --dry",
+    "fetch:attendees": "tsx scripts/fetch-attendees.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "dev:demo": "MUDASH_DEMO=1 next dev"
   },
@@ -32,6 +33,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5"
