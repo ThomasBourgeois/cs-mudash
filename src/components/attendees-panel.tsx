@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
-import { Check, Copy, Mail } from "lucide-react"
+import { Check, Copy, Mail, TriangleAlert } from "lucide-react"
 
 import {
   Card,
@@ -21,8 +21,15 @@ import {
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { setSent } from "@/app/actions"
-import { formatEventDate } from "@/lib/metrics"
-import { attendeeKey, type Attendee, type SentMap } from "@/lib/types"
+import { formatEventDate, isUpcoming } from "@/lib/metrics"
+import {
+  attendeeKey,
+  type Attendee,
+  type EventSnapshot,
+  type SentMap,
+} from "@/lib/types"
+
+const plural = (n: number) => (n > 1 ? "s" : "")
 
 /**
  * Les emails laissés par les participants, prêts à être copiés, et le suivi de
@@ -31,19 +38,28 @@ import { attendeeKey, type Attendee, type SentMap } from "@/lib/types"
  * Ne s'affiche que si data/attendees.ndjson existe — un fichier local et
  * gitignoré. Sur un déploiement distant, la section disparaît : c'est voulu,
  * ces données personnelles ne quittent pas la machine de l'organisateur.
+ *
+ * Ce relevé est MANUEL, contrairement à l'historique que GitHub Actions
+ * rafraîchit tous les jours : il vieillit dès qu'une inscription arrive. On
+ * confronte donc chaque capture au `going` du dernier snapshot pour dire
+ * combien de participants manquent, plutôt que d'afficher un compte périmé
+ * qui a l'air complet.
  */
 export function AttendeesPanel({
   attendees,
   sent: initialSent,
+  events,
 }: {
   attendees: Attendee[]
   sent: SentMap
+  /** Dernier état connu de chaque événement — la référence de fraîcheur. */
+  events: EventSnapshot[]
 }) {
   const [sent, setSentMap] = useState<SentMap>(initialSent)
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
-  // Un groupe par événement, dans l'ordre du fichier (chronologique).
+  // Un groupe par événement, dans l'ordre chronologique.
   const groups = useMemo(() => {
     const byEvent = new Map<string, Attendee[]>()
     for (const a of attendees) {
@@ -51,8 +67,31 @@ export function AttendeesPanel({
       if (list) list.push(a)
       else byEvent.set(a.eventId, [a])
     }
-    return [...byEvent.values()]
-  }, [attendees])
+    const eventById = new Map(events.map((e) => [e.id, e]))
+
+    const groups = [...byEvent].map(([eventId, list]) => ({
+      eventId,
+      event: eventById.get(eventId),
+      attendees: list,
+      dateTime: list[0].eventDateTime,
+    }))
+
+    // Un événement à venir jamais relevé n'a aucune ligne dans le fichier : sans
+    // ça il disparaîtrait de la section, alors que c'est justement celui dont
+    // les emails manquent le plus.
+    for (const event of events) {
+      if (isUpcoming(event) && !byEvent.has(event.id)) {
+        groups.push({
+          eventId: event.id,
+          event,
+          attendees: [],
+          dateTime: event.dateTime,
+        })
+      }
+    }
+
+    return groups.sort((a, b) => a.dateTime.localeCompare(b.dateTime))
+  }, [attendees, events])
 
   function toggle(key: string, next: boolean) {
     // Optimiste : cocher doit être instantané, l'écriture disque suit.
@@ -87,26 +126,33 @@ export function AttendeesPanel({
           {error}
         </p>
       )}
-      {groups.map((group) => (
-        <EventAttendees
-          key={group[0].eventId}
-          attendees={group}
-          sent={sent}
-          onToggle={toggle}
-          pending={pending}
-        />
-      ))}
+      {groups.map((group) =>
+        group.attendees.length === 0 ? (
+          <UncapturedEvent key={group.eventId} event={group.event!} />
+        ) : (
+          <EventAttendees
+            key={group.eventId}
+            attendees={group.attendees}
+            event={group.event}
+            sent={sent}
+            onToggle={toggle}
+            pending={pending}
+          />
+        ),
+      )}
     </div>
   )
 }
 
 function EventAttendees({
   attendees,
+  event,
   sent,
   onToggle,
   pending,
 }: {
   attendees: Attendee[]
+  event: EventSnapshot | undefined
   sent: SentMap
   onToggle: (key: string, next: boolean) => void
   pending: boolean
@@ -119,22 +165,49 @@ function EventAttendees({
   // rien n'a été demandé. On le dit, plutôt que d'afficher un zéro trompeur.
   const asksQuestion = Boolean(first.eventQuestion)
 
+  // Le relevé des participants est manuel, l'historique est quotidien : l'écart
+  // entre les deux, c'est exactement ce qui manque au fichier local.
+  const going = event?.going ?? null
+  const missing = going === null ? 0 : Math.max(0, going - attendees.length)
+  const capturedAt = attendees.reduce(
+    (latest, a) => (a.capturedAt > latest ? a.capturedAt : latest),
+    first.capturedAt,
+  )
+
+  // Sans question à l'inscription, il n'y a aucun email à collecter : ni tableau
+  // de pseudos, ni relance de relevé. On garde une ligne pour dire pourquoi
+  // l'événement n'apporte rien, sinon son absence passerait pour un oubli.
+  if (!asksQuestion) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="leading-snug">{first.eventTitle}</CardTitle>
+          <CardDescription>
+            {formatEventDate(first.eventDateTime)}{" "}
+            · aucune question posée à l&apos;inscription, donc aucun email à
+            collecter
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="leading-snug">{first.eventTitle}</CardTitle>
         <CardDescription>
-          {formatEventDate(first.eventDateTime)} · {attendees.length} inscrit
-          {attendees.length > 1 ? "s" : ""}
-          {asksQuestion ? (
-            <>
-              {" "}
-              · {withEmail.length} email{withEmail.length > 1 ? "s" : ""} · {sentCount}{" "}
-              envoyé{sentCount > 1 ? "s" : ""}
-            </>
-          ) : (
-            <> · aucune question posée à l&apos;inscription</>
-          )}
+          {formatEventDate(first.eventDateTime)} · {attendees.length} participant
+          {plural(attendees.length)} relevé{plural(attendees.length)}
+          {/* « 29 relevés sur 27 » se lirait comme une erreur : le `going` du
+              relevé de ce matin est un plancher, des inscriptions arrivent
+              après. On ne l'affiche donc que lorsqu'il manque quelqu'un. */}
+          {going !== null &&
+            going > attendees.length &&
+            ` sur ${going} inscrit${plural(going)}`}
+          {" "}
+          · {withEmail.length} email{plural(withEmail.length)} · {sentCount} envoyé
+          {plural(sentCount)}
         </CardDescription>
         <CardAction className="flex flex-wrap gap-2">
           {remaining.length > 0 && sentCount > 0 && (
@@ -160,11 +233,28 @@ function EventAttendees({
         </CardAction>
       </CardHeader>
       <CardContent>
-        {asksQuestion && (
-          <p className="text-muted-foreground mb-3 line-clamp-2 text-xs italic">
-            « {first.eventQuestion} »
+        {missing > 0 && (
+          <p className="border-chart-4 bg-chart-4/10 mb-3 flex items-start gap-2 rounded-md border-l-4 px-3 py-2 text-sm">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>
+              <strong>Relevé incomplet.</strong> {attendees.length} participant
+              {plural(attendees.length)} capturé{plural(attendees.length)} le{" "}
+              {formatEventDate(capturedAt)}, l&apos;événement en compte {going} au
+              dernier relevé Meetup — {missing} manquant{plural(missing)}. Relance{" "}
+              <code>
+                npm run fetch:attendees
+                {event && !isUpcoming(event) && ` -- --event ${event.id}`}
+              </code>{" "}
+              {event && !isUpcoming(event) &&
+                "(l'événement est passé : sans --event il serait ignoré) "}
+              — recopie d&apos;abord <code>MEETUP_COOKIE</code> dans{" "}
+              <code>.env.local</code> s&apos;il a expiré.
+            </span>
           </p>
         )}
+        <p className="text-muted-foreground mb-3 line-clamp-2 text-xs italic">
+          « {first.eventQuestion} »
+        </p>
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -231,6 +321,24 @@ function EventAttendees({
             </TableBody>
           </Table>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Événement à venir dont aucun participant n'a encore été relevé. */
+function UncapturedEvent({ event }: { event: EventSnapshot }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="leading-snug">{event.title}</CardTitle>
+        <CardDescription>
+          {formatEventDate(event.dateTime)} · {event.going} inscrit{plural(event.going)}{" "}
+          · aucun participant relevé
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="text-muted-foreground text-sm">
+        Lance <code>npm run fetch:attendees</code> pour récupérer leurs emails.
       </CardContent>
     </Card>
   )

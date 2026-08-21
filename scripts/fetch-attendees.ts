@@ -16,7 +16,7 @@
  * l'hydratation, elles ne sont pas dans le HTML rendu côté serveur.
  *
  *   npm run fetch:attendees                  relève tous les événements à venir
- *   npm run fetch:attendees -- --event 315692119
+ *   npm run fetch:attendees -- --event 315692119   un seul, passé compris
  *   npm run fetch:attendees -- --dump        garde les réponses brutes
  *   npm run fetch:attendees -- --from-dump   rejoue le parsing sans réseau
  *
@@ -27,7 +27,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs"
 import { dirname, resolve, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { chromium, type Page } from "playwright"
+import { chromium, type BrowserContext, type Page } from "playwright"
 import type { Attendee, Snapshot } from "../src/lib/types.ts"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -39,7 +39,8 @@ const DUMP_DIR = resolve(ROOT, ".meetup-dump")
 
 const GROUP =
   process.env.MEETUP_GROUP ?? "coder-comprendre-lia-grands-debutants-paris"
-const BASE = `https://www.meetup.com/fr-FR/${GROUP}`
+const ORIGIN = "https://www.meetup.com/"
+const BASE = `${ORIGIN}fr-FR/${GROUP}`
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(`--${name}`)
@@ -79,6 +80,8 @@ function readCookieFromEnv(): string {
   throw new Error("MEETUP_COOKIE absent de .env.local")
 }
 
+type CookieParam = Parameters<BrowserContext["addCookies"]>[0][number]
+
 /**
  * "a=b; c=d" → cookies Playwright.
  *
@@ -86,7 +89,7 @@ function readCookieFromEnv(): string {
  * (« Copy value ») et une commande cURL complète collée telle quelle, pour
  * éviter d'imposer un nettoyage manuel sur une chaîne de 2 000 caractères.
  */
-function parseCookies(raw: string): { name: string; value: string; domain: string; path: string }[] {
+function parseCookies(raw: string): CookieParam[] {
   const fromCurl =
     raw.match(/-H\s+['"]cookie:\s*([^'"]*)['"]/i)?.[1] ??
     raw.match(/-b\s+['"]([^'"]*)['"]/)?.[1]
@@ -97,44 +100,129 @@ function parseCookies(raw: string): { name: string; value: string; domain: strin
     .map((pair) => {
       const eq = pair.indexOf("=")
       if (eq <= 0) return null
+      const name = pair.slice(0, eq).trim()
+      const value = pair.slice(eq + 1).trim()
+
+      // Un cookie préfixé __Host- doit être host-only : Chrome le REFUSE dès
+      // qu'on lui donne un domaine, et fait échouer tout le lot avec un
+      // « Invalid cookie fields » qui ne dit pas lequel. Le poser par URL laisse
+      // le navigateur en déduire le bon (hôte, path, secure). Meetup en pose un
+      // pour son jeton CSRF, donc le cas n'a rien de théorique.
+      if (name.startsWith("__Host-")) return { name, value, url: ORIGIN }
+
       return {
         // Le point initial couvre www.meetup.com comme meetup.com.
         domain: ".meetup.com",
         path: "/",
-        name: pair.slice(0, eq).trim(),
-        value: pair.slice(eq + 1).trim(),
+        // Exigé par les cookies préfixés __Secure-, et sans effet sur les
+        // autres : on ne visite que du https.
+        secure: true,
+        name,
+        value,
       }
     })
     .filter((c): c is NonNullable<typeof c> => c !== null && c.name.length > 0)
+}
+
+/**
+ * Pose les cookies en tolérant les brebis galeuses.
+ *
+ * L'en-tête copié depuis le navigateur mélange les cookies de Meetup et ceux
+ * de tiers embarqués (Google One Tap, analytics), dont certains portent une
+ * valeur que Chrome refuse — un JSON avec guillemets et virgules, par exemple.
+ * Un seul refus fait échouer le lot entier : on repasse alors un par un et on
+ * saute les fautifs en les nommant, plutôt que d'abandonner le relevé à cause
+ * d'un cookie qui ne sert à rien ici.
+ */
+async function addCookies(
+  context: BrowserContext,
+  cookies: CookieParam[],
+): Promise<number> {
+  try {
+    await context.addCookies(cookies)
+    return cookies.length
+  } catch {
+    const skipped: string[] = []
+    for (const cookie of cookies) {
+      await context.addCookies([cookie]).catch(() => skipped.push(cookie.name))
+    }
+    if (skipped.length > 0) {
+      console.log(
+        `⚠ ${skipped.length} cookie(s) refusés par Chrome, ignorés : ${skipped.join(", ")}`,
+      )
+    }
+    return cookies.length - skipped.length
+  }
 }
 
 /* ------------------------------------------------------------------ capture */
 
 type Capture = { eventId: string; url: string; payloads: unknown[]; html: string }
 
-/** Déplie la liste : Meetup pagine les participants derrière un bouton. */
-async function expandList(page: Page): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    const more = page
-      .getByRole("button", { name: /plus|more|suivant|next/i })
-      .filter({ visible: true })
-      .first()
-    if ((await more.count()) === 0) break
-    await more.click({ timeout: 5000 }).catch(() => {})
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {})
-    await sleep(500)
+/**
+ * Le bandeau de consentement OneTrust se pose par-dessus la page et bloque le
+ * scroll — donc le chargement de la suite de la liste. On le refuse, et on
+ * retire ce qu'il en reste au cas où le clic n'aurait pas pris.
+ */
+async function dismissConsent(page: Page): Promise<void> {
+  await page
+    .locator("#onetrust-reject-all-handler")
+    .first()
+    .click({ timeout: 3000 })
+    .catch(() => {})
+  await page.evaluate(() => {
+    document.getElementById("onetrust-consent-sdk")?.remove()
+    document.documentElement.style.overflow = ""
+    document.body.style.overflow = ""
+  })
+}
+
+/**
+ * Déplie la liste des participants.
+ *
+ * Meetup les pagine par 10 (`pageInfo.hasNextPage` / `endCursor`) et charge la
+ * suite AU SCROLL : il n'y a aucun bouton « voir plus » à cliquer. Un seul
+ * scroll ne ramenait qu'une page, ce qui plafonnait le relevé à 20 participants
+ * sur 29.
+ *
+ * Le témoin de progression est le nombre de participants EXTRAITS des réponses
+ * GraphQL, pas le nombre de cartes dans le DOM : la liste est virtualisée, le
+ * DOM démonte ce qui sort de l'écran et son compte redescend en cours de route.
+ * Les réponses réseau, elles, ne se reprennent jamais.
+ */
+async function expandList(
+  page: Page,
+  { progress, target }: { progress: () => number; target: number },
+): Promise<void> {
+  await dismissConsent(page)
+
+  let seen = progress()
+  let idle = 0
+  // Trois descentes sans nouveau participant : on est en bas de la liste.
+  for (let i = 0; i < 60 && idle < 3; i++) {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    await sleep(1500)
+
+    const now = progress()
+    if (now > seen) {
+      seen = now
+      idle = 0
+    } else {
+      idle++
+    }
+    // `going` du dernier relevé quotidien : un plancher, pas un plafond — des
+    // inscriptions ont pu arriver depuis. On ne s'arrête dessus que pour éviter
+    // de scroller dans le vide une fois la liste manifestement complète.
+    if (target > 0 && seen >= target) break
   }
-  // Certaines listes chargent au scroll plutôt qu'au clic.
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {})
 }
 
 async function captureEvent(
   page: Page,
-  eventId: string,
+  event: EventRef,
   cookieCount: number,
 ): Promise<Capture> {
-  const url = `${BASE}/events/${eventId}/attendees/`
+  const url = `${BASE}/events/${event.id}/attendees/`
   const payloads: unknown[] = []
 
   // On écoute les réponses GraphQL : les réponses aux questions d'inscription
@@ -163,7 +251,10 @@ async function captureEvent(
     )
   }
 
-  await expandList(page)
+  await expandList(page, {
+    progress: () => parseCapture({ eventId: event.id, url, payloads, html: "" }, event).length,
+    target: event.going,
+  })
   page.off("response", onResponse)
 
   // Le blob __NEXT_DATA__ du rendu serveur complète les réponses réseau.
@@ -179,7 +270,7 @@ async function captureEvent(
     }
   }
 
-  return { eventId, url, payloads, html }
+  return { eventId: event.id, url, payloads, html }
 }
 
 /* ------------------------------------------------------------------- parsing */
@@ -297,18 +388,57 @@ function parseCapture(capture: Capture, event: EventRef): Attendee[] {
 
 /* -------------------------------------------------------------------- store */
 
-type EventRef = { id: string; title: string; dateTime: string }
+type EventRef = {
+  id: string
+  title: string
+  dateTime: string
+  /** Inscrits au dernier relevé quotidien — le compte que la capture doit atteindre. */
+  going: number
+}
 
-function upcomingEvents(): EventRef[] {
+function readSnapshots(): Snapshot[] {
   if (!existsSync(HISTORY_PATH)) {
     throw new Error("data/history.ndjson introuvable — lance d'abord `npm run fetch`")
   }
-  const lines = readFileSync(HISTORY_PATH, "utf8").split("\n").filter((l) => l.trim())
-  const latest = JSON.parse(lines.at(-1)!) as Snapshot
+  return readFileSync(HISTORY_PATH, "utf8")
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l) as Snapshot)
+}
+
+function upcomingEvents(): EventRef[] {
+  const latest = readSnapshots().at(-1)!
   return latest.events
     .filter((e) => e.status === "ACTIVE" && new Date(e.dateTime).getTime() > Date.now())
     .sort((a, b) => a.dateTime.localeCompare(b.dateTime))
-    .map((e) => ({ id: e.id, title: e.title, dateTime: e.dateTime }))
+    .map((e) => ({ id: e.id, title: e.title, dateTime: e.dateTime, going: e.going }))
+}
+
+/**
+ * Un événement quelconque de l'historique, passé compris.
+ *
+ * Le relevé par défaut se limite aux événements à venir — ce sont eux dont on
+ * attend encore des inscriptions. Mais la page participants reste accessible
+ * après coup, et un relevé oublié se rattrape : `--event <id>` doit donc
+ * pouvoir viser un événement déjà passé, pas seulement ceux du dernier
+ * snapshot.
+ */
+function findEvent(id: string): EventRef {
+  for (const snap of readSnapshots().reverse()) {
+    const match = snap.events.find((e) => e.id === id)
+    if (match) {
+      return {
+        id: match.id,
+        title: match.title,
+        dateTime: match.dateTime,
+        going: match.going,
+      }
+    }
+  }
+  throw new Error(
+    `Événement ${id} inconnu de data/history.ndjson.\n` +
+      "  Vérifie l'identifiant dans l'URL Meetup, ou lance `npm run fetch`.",
+  )
 }
 
 /**
@@ -359,6 +489,14 @@ function loadDumps(): Capture[] {
     })
 }
 
+const tryFindEvent = (id: string): EventRef | null => {
+  try {
+    return findEvent(id)
+  } catch {
+    return null
+  }
+}
+
 /* --------------------------------------------------------------------- main */
 
 function report(event: EventRef, attendees: Attendee[]): void {
@@ -370,21 +508,33 @@ function report(event: EventRef, attendees: Attendee[]): void {
       `${attendees.length} participants, ${withAnswer} réponses, ${withEmail} emails` +
       (noQuestion ? "  (aucune question posée à l'inscription)" : ""),
   )
+  // Le relevé quotidien donne un plancher : en dessous, la liste n'a pas fini de
+  // se déplier et le silence coûterait des emails. Au-dessus, c'est normal — des
+  // inscriptions sont arrivées depuis le snapshot de ce matin.
+  if (event.going > attendees.length) {
+    console.log(
+      `    ⚠ ${event.going} inscrits au dernier relevé quotidien : ` +
+        `${event.going - attendees.length} manquent. Relance avec --dump et ` +
+        `inspecte .meetup-dump/ — la pagination de la page a pu changer.`,
+    )
+  }
 }
 
 async function main(): Promise<void> {
   const only = value("event")
-  const events = upcomingEvents().filter((e) => !only || e.id === only)
+  const events = only ? [findEvent(only)] : upcomingEvents()
 
   if (flag("from-dump")) {
     console.log("Rejeu du parsing depuis .meetup-dump/ (aucun réseau)\n")
     const all: Attendee[] = []
     for (const capture of loadDumps()) {
-      const event = events.find((e) => e.id === capture.eventId) ?? {
-        id: capture.eventId,
-        title: "(inconnu)",
-        dateTime: "",
-      }
+      const event = events.find((e) => e.id === capture.eventId) ??
+        tryFindEvent(capture.eventId) ?? {
+          id: capture.eventId,
+          title: "(inconnu)",
+          dateTime: "",
+          going: 0,
+        }
       const attendees = parseCapture(capture, event)
       report(event, attendees)
       all.push(...attendees)
@@ -400,7 +550,6 @@ async function main(): Promise<void> {
   }
 
   const cookies = parseCookies(readCookieFromEnv())
-  console.log(`${events.length} événement(s) à venir — ${cookies.length} cookies chargés\n`)
 
   // `channel: "chrome"` réutilise le Chrome installé sur la machine plutôt que
   // le Chromium de Playwright, dont la version change à chaque mise à jour du
@@ -409,13 +558,17 @@ async function main(): Promise<void> {
     .launch({ headless: true, channel: "chrome" })
     .catch(() => chromium.launch({ headless: true }))
   const context = await browser.newContext({ locale: "fr-FR" })
-  await context.addCookies(cookies)
+  const loaded = await addCookies(context, cookies)
+  console.log(
+    (only ? `Événement ${only}` : `${events.length} événement(s) à venir`) +
+      ` — ${loaded} cookies chargés\n`,
+  )
   const page = await context.newPage()
 
   try {
     const all: Attendee[] = []
     for (const event of events) {
-      const capture = await captureEvent(page, event.id, cookies.length)
+      const capture = await captureEvent(page, event, loaded)
       if (flag("dump")) saveDump(capture)
       const attendees = parseCapture(capture, event)
       report(event, attendees)

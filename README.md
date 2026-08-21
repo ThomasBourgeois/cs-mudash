@@ -128,12 +128,28 @@ manquerait.
 
 | Option | Effet |
 |---|---|
-| `-- --event 315692119` | Un seul événement |
+| `-- --event 315692119` | Un seul événement, **passé compris** (le relevé par défaut se limite aux événements à venir) |
 | `-- --dump` | Garde les réponses brutes dans `.meetup-dump/` |
 | `-- --from-dump` | Rejoue le parsing sur ces captures, sans réseau |
 
 Quand le cookie expire, Meetup renvoie vers `/login` et le script s'arrête en le
 disant. Il n'écrit jamais un relevé vide en croyant avoir réussi.
+
+Deux pièges de la page participants, traités par le script :
+
+- **La liste se charge par 10, au scroll**, sans bouton « voir plus », et le DOM
+  est virtualisé — le nombre de cartes affichées redescend en cours de route. Le
+  script descend donc jusqu'à ce que le nombre de participants *extraits des
+  réponses GraphQL* cesse d'augmenter. Un relevé qui reste sous le `going` du
+  dernier relevé quotidien est signalé en fin de ligne : c'est le symptôme d'une
+  pagination qui a changé.
+- **Le bandeau de consentement** se met en travers du scroll : il est refusé et
+  retiré avant de dérouler la liste.
+
+Côté cookie, un `__Host-…` (Meetup en pose un pour son jeton CSRF) doit être
+posé sans domaine, sinon Chrome rejette **tout le lot** avec un laconique
+`Invalid cookie fields`. Les cookies tiers dont Chrome refuse la valeur sont
+ignorés un par un plutôt que de faire échouer le relevé.
 
 ### Ce qui est affiché
 
@@ -144,8 +160,18 @@ plage temporelle — une adresse email ne se périme pas au bout de 7 jours. Par
 destinataires) et une case **Envoyé** par participant pour suivre les envois de
 matériel.
 
-Un événement sans question configurée est signalé comme tel : « 0 email » y
-signifie *rien n'a été demandé*, pas *personne n'a répondu*.
+Un événement sans question configurée se réduit à une ligne — « aucune question
+posée à l'inscription, donc aucun email à collecter » — sans tableau de
+participants : il n'y a rien à y collecter, et la liste des pseudos n'aurait
+pas sa place dans une section dédiée aux emails. La ligne reste affichée pour
+que son absence ne passe pas pour un oubli de relevé.
+
+**Ce relevé-ci est manuel, l'historique est quotidien** : les deux divergent dès
+qu'une inscription arrive après la dernière capture. Chaque événement affiche
+donc « N participants relevés sur M inscrits », M venant du dernier snapshot de
+`history.ndjson`, et un bandeau réclame un nouveau relevé quand il en manque.
+Un événement à venir dont aucun participant n'a jamais été relevé apparaît
+quand même, plutôt que de disparaître silencieusement.
 
 ### Confidentialité
 

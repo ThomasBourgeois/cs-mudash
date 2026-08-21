@@ -63,6 +63,9 @@ export function Dashboard({
     [scoped, colorSlots],
   )
   const registry = useMemo(() => eventRegistry(scoped), [scoped])
+  // Hors plage, comme la section emails qu'il alimente : il sert de référence
+  // de fraîcheur au relevé des participants, qui lui n'est pas filtré.
+  const allEvents = useMemo(() => eventRegistry(snapshots), [snapshots])
 
   const latest = scoped.at(-1)
   const memberDelta = delta(members)
@@ -180,10 +183,12 @@ export function Dashboard({
           </h2>
           <p className="text-muted-foreground mt-1 text-sm">
             Réponses laissées à l&apos;inscription, pour l&apos;envoi du matériel.
-            Données locales, jamais commitées.
+            Données locales, jamais commitées. Ce relevé est manuel :
+            contrairement aux graphiques ci-dessus, il ne se met à jour qu&apos;au
+            lancement de <code>npm run fetch:attendees</code>.
           </p>
         </div>
-        <AttendeesPanel attendees={attendees} sent={sent} />
+        <AttendeesPanel attendees={attendees} sent={sent} events={allEvents} />
       </section>
     </div>
   )
