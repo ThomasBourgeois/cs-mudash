@@ -200,7 +200,22 @@ async function expandList(
   let idle = 0
   // Trois descentes sans nouveau participant : on est en bas de la liste.
   for (let i = 0; i < 60 && idle < 3; i++) {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    // Meetup pagine via IntersectionObserver sur un sentinel en bas de liste.
+    // Un simple scrollTo(0, scrollHeight) ne re-déclenche pas l'observer quand
+    // le sentinel reste dans le viewport. On le fait sortir (scroll en haut de
+    // la liste) puis revenir (scroll en bas) pour forcer une intersection.
+    await page.evaluate(() => {
+      const list = document.querySelector<HTMLElement>('[class*="min-h-"][class*="space-y"]')
+      if (list) list.scrollIntoView({ block: "start" })
+      else window.scrollTo(0, 0)
+    })
+    await sleep(300)
+    await page.evaluate(() => {
+      // Le sentinel est le <span style="font-size: 0px"> juste après la liste.
+      const sentinel = document.querySelector<HTMLElement>('span[style*="font-size: 0px"]')
+      if (sentinel) sentinel.scrollIntoView({ block: "end" })
+      else window.scrollTo(0, document.body.scrollHeight)
+    })
     await sleep(1500)
 
     const now = progress()
