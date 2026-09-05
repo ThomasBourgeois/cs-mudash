@@ -90,7 +90,11 @@ export function AttendeesPanel({
       }
     }
 
-    return groups.sort((a, b) => a.dateTime.localeCompare(b.dateTime))
+    return groups
+      .filter((g) =>
+        g.event ? isUpcoming(g.event) : new Date(g.dateTime).getTime() > Date.now(),
+      )
+      .sort((a, b) => a.dateTime.localeCompare(b.dateTime))
   }, [attendees, events])
 
   function toggle(key: string, next: boolean) {
