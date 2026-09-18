@@ -11,7 +11,9 @@
  *   /<groupe>/events/           -> événements à venir (first:30)
  *   /<groupe>/events/?type=past -> événements passés (first:10, plus récents d'abord)
  *
- * Le résultat est ajouté à data/history.ndjson (une ligne JSON par jour).
+ * Le résultat est ajouté à l'historique du groupe (une ligne JSON par jour) :
+ * data/history.ndjson pour le groupe d'origine, data/history-<groupe>.ndjson
+ * pour les suivants. Le groupe se choisit avec MEETUP_GROUP.
  * Relancer le script le même jour remplace la ligne du jour : l'opération est
  * idempotente, on peut donc réexécuter sans polluer l'historique.
  */
@@ -23,11 +25,20 @@ import type { EventSnapshot, Snapshot } from "../src/lib/types.ts"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, "..")
-const HISTORY_PATH = resolve(ROOT, "data/history.ndjson")
+/**
+ * Le premier groupe relevé, avant qu'il y en ait plusieurs. Son historique
+ * garde le nom `data/history.ndjson` : le tableau de bord et cours-socrate-site
+ * le lisent sous ce nom. Les autres groupes vont dans des fichiers suffixés.
+ */
+const LEGACY_GROUP = "coder-comprendre-lia-grands-debutants-paris"
 
-const GROUP =
-  process.env.MEETUP_GROUP ?? "coder-comprendre-lia-grands-debutants-paris"
+const GROUP = process.env.MEETUP_GROUP ?? LEGACY_GROUP
 const BASE = `https://www.meetup.com/fr-FR/${GROUP}`
+
+const HISTORY_PATH = resolve(
+  ROOT,
+  GROUP === LEGACY_GROUP ? "data/history.ndjson" : `data/history-${GROUP}.ndjson`,
+)
 
 /** Un vrai User-Agent : Meetup renvoie une page dégradée sans données aux UA inconnus. */
 const HEADERS = {

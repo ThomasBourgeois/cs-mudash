@@ -37,19 +37,27 @@ jobs:
       - name: Installer tsx
         run: npm install --no-save tsx@4
 
+      # Un groupe par ligne d'historique : le script écrit data/history.ndjson
+      # pour le groupe d'origine, data/history-<groupe>.ndjson pour les autres.
+      # Séquentiel plutôt qu'en matrice : les jobs d'une matrice pousseraient
+      # sur la même branche en parallèle.
       - name: Relever les chiffres
         env:
-          MEETUP_GROUP: ${{ vars.MEETUP_GROUP || 'coder-comprendre-lia-grands-debutants-paris' }}
-        run: npx tsx scripts/fetch-meetup.ts
+          MEETUP_GROUPS: ${{ vars.MEETUP_GROUPS || 'coder-comprendre-lia-grands-debutants-paris,agents-ia-creez-vos-outils-et-automatisez' }}
+        run: |
+          IFS=',' read -ra groups <<< "$MEETUP_GROUPS"
+          for group in "${groups[@]}"; do
+            MEETUP_GROUP="$(echo "$group" | xargs)" npx tsx scripts/fetch-meetup.ts
+          done
 
       - name: Commiter l'historique
         run: |
-          if git diff --quiet -- data/history.ndjson; then
+          if git diff --quiet -- data/; then
             echo "Aucun changement — rien à commiter."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/history.ndjson
+          git add data/
           git commit -m "chore(data): relevé Meetup du $(date -u +%Y-%m-%d)"
           git push

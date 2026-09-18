@@ -13,8 +13,11 @@ GitHub Actions (06:00 UTC)  →  scripts/fetch-meetup.ts  →  data/history.ndjs
 ```
 
 Le relevé tourne sur les serveurs GitHub, donc **indépendamment de ton ordinateur**.
-Il commite une ligne par jour dans `data/history.ndjson`. En local, un `git pull`
-suffit pour voir les chiffres du jour.
+Il commite une ligne par jour et par groupe. Le groupe d'origine garde
+`data/history.ndjson` ; les autres vont dans `data/history-<groupe>.ndjson`. La
+liste se règle dans la variable de dépôt `MEETUP_GROUPS` (slugs séparés par des
+virgules), ou en local avec `MEETUP_GROUP=<slug> npm run fetch`. En local, un
+`git pull` suffit pour voir les chiffres du jour.
 
 ## Démarrage
 
